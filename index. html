@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Study Guide Maker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>AI Study Guide Maker</h1>
+    <button id="newClassBtn">+ New Class</button>
+  </header>
+
+  <main>
+    <!-- Class selector -->
+    <select id="classSelect"></select>
+
+    <!-- Tabs inside a class -->
+    <div id="tabs"></div>
+
+    <!-- Content area -->
+    <section id="content">
+      <div id="sourcesTab" class="tab-content">
+        <h2>Sources (text / PDFs / images)</h2>
+        <textarea id="textSource" placeholder="Paste text here…"></textarea>
+        <input type="file" id="fileSource" multiple accept=".txt,.pdf,image/*" />
+        <button id="addSourceBtn">Add Source</button>
+
+        <h3>Current sources</h3>
+        <ul id="sourceList"></ul>
+      </div>
+
+      <div id="guideTab" class="tab-content" style="display:none;">
+        <h2>Study Guide</h2>
+        <button id="generateBtn">Generate Guide</button>
+        <div id="guideOutput"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
