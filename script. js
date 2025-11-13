@@ -1,0 +1,210 @@
+// ---------- Persistent storage ----------
+const DB_NAME = 'StudyGuideDB';
+let db;
+
+// Open IndexedDB
+const openDB = () => {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('classes')) {
+        db.createObjectStore('classes', { keyPath: 'id', autoIncrement: true });
+      }
+      if (!db.objectStoreNames.contains('sources')) {
+        const store = db.createObjectStore('sources', { keyPath: 'id', autoIncrement: true });
+        store.createIndex('classId', 'classId', { unique: false });
+      }
+    };
+    req.onsuccess = () => { db = req.result; resolve(db); };
+    req.onerror = () => reject(req.error);
+  });
+};
+
+// ---------- UI elements ----------
+const classSelect = document.getElementById('classSelect');
+const newClassBtn = document.getElementById('newClassBtn');
+const tabsDiv = document.getElementById('tabs');
+const sourcesTab = document.getElementById('sourcesTab');
+const guideTab = document.getElementById('guideTab');
+const textSource = document.getElementById('textSource');
+const fileSource = document.getElementById('fileSource');
+const addSourceBtn = document.getElementById('addSourceBtn');
+const sourceList = document.getElementById('sourceList');
+const generateBtn = document.getElementById('generateBtn');
+const guideOutput = document.getElementById('guideOutput');
+
+// ---------- Helper ----------
+const tx = (storeName, mode = 'readonly') => db.transaction(storeName, mode).objectStore(storeName);
+
+// ---------- Load classes ----------
+async function loadClasses() {
+  await openDB();
+  const classes = await tx('classes').getAll();
+  classSelect.innerHTML = '<option value="">-- Select Class --</option>';
+  classes.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    classSelect.appendChild(opt);
+  });
+  if (classes.length === 0) createClass('Default Class');
+}
+
+// ---------- Create new class ----------
+async function createClass(name) {
+  const cls = { name, created: Date.now() };
+  const id = await tx('classes', 'readwrite').add(cls);
+  await loadClasses();
+  classSelect.value = id;
+  switchClass();
+}
+
+// ---------- Switch class ----------
+async function switchClass() {
+  const classId = classSelect.value;
+  if (!classId) return;
+
+  // Show tabs
+  tabsDiv.innerHTML = `
+    <button class="tab-btn active" data-tab="sources">Sources</button>
+    <button class="tab-btn" data-tab="guide">Guide</button>
+  `;
+  tabsDiv.querySelectorAll('.tab-btn').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+
+  // Load sources
+  await loadSources(classId);
+  showTab('sources');
+}
+
+// ---------- Tab switching ----------
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+  sourcesTab.style.display = tab === 'sources' ? 'block' : 'none';
+  guideTab.style.display   = tab === 'guide'   ? 'block' : 'none';
+  showTab(tab);
+}
+function showTab(tab) {
+  if (tab === 'guide') generateBtn.onclick = generateGuide;
+}
+
+// ---------- Add source ----------
+addSourceBtn.onclick = async () => {
+  const classId = classSelect.value;
+  if (!classId) return alert('Select a class first');
+
+  // 1. Textarea
+  const txt = textSource.value.trim();
+  if (txt) {
+    await tx('sources', 'readwrite').add({ classId: +classId, type: 'text', content: txt, name: 'Pasted text' });
+    textSource.value = '';
+  }
+
+  // 2. Files
+  const files = fileSource.files;
+  for (const file of files) {
+    const name = file.name;
+    if (file.type === 'application/pdf') {
+      const text = await extractPDFText(file);
+      await tx('sources', 'readwrite').add({ classId: +classId, type: 'pdf', content: text, name });
+    } else if (file.type.startsWith('image/')) {
+      const text = await ocrImage(file);
+      await tx('sources', 'readwrite').add({ classId: +classId, type: 'image', content: text, name });
+    } else {
+      const text = await file.text();
+      await tx('sources', 'readwrite').add({ classId: +classId, type: 'text', content: text, name });
+    }
+  }
+  fileSource.value = '';
+  await loadSources(classId);
+};
+
+// ---------- OCR with Tesseract ----------
+async function ocrImage(file) {
+  const worker = await Tesseract.createWorker('eng');
+  const { data: { text } } = await worker.recognize(file);
+  await worker.terminate();
+  return text;
+}
+
+// ---------- PDF text extraction ----------
+async function extractPDFText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const txt = await page.getTextContent();
+    fullText += txt.items.map(s => s.str).join(' ') + '\n';
+  }
+  return fullText;
+}
+
+// ---------- Load sources UI ----------
+async function loadSources(classId) {
+  const sources = await tx('sources').index('classId').getAll(IDBKeyRange.only(+classId));
+  sourceList.innerHTML = '';
+  sources.forEach(s => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${s.name} (${s.type})</span>
+      <button data-id="${s.id}">Delete</button>`;
+    li.querySelector('button').onclick = async () => {
+      await tx('sources', 'readwrite').delete(s.id);
+      await loadSources(classId);
+    };
+    sourceList.appendChild(li);
+  });
+}
+
+// ---------- Generate study guide ----------
+async function generateGuide() {
+  const classId = classSelect.value;
+  const sources = await tx('sources').index('classId').getAll(IDBKeyRange.only(+classId));
+  const rawText = sources.map(s => s.content).join('\n\n---\n\n');
+
+  guideOutput.textContent = 'Generating…';
+  try {
+    // ----> Use **your own API key** (OpenAI, Grok, Claude, etc.) <----
+    const API_KEY = 'YOUR_API_KEY_HERE';          // <<<<< PUT YOUR KEY HERE
+    const MODEL   = 'gpt-4o-mini';                // cheap & fast
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.5,
+        messages: [
+          { role: 'system', content: `You are an expert study-guide creator. 
+Only use the text below. Structure the guide with:
+• Clear headings
+• Bullet-point key concepts
+• Short definitions
+• Example problems (if any)
+• Quick-review quiz at the end.` },
+          { role: 'user', content: rawText }
+        ]
+      })
+    });
+
+    const data = await response.json();
+    const guide = data.choices[0].message.content;
+    guideOutput.textContent = guide;
+  } catch (e) {
+    guideOutput.textContent = 'Error: ' + e.message + '\n\nMake sure you added a valid API key.';
+  }
+}
+
+// ---------- Event listeners ----------
+newClassBtn.onclick = () => {
+  const name = prompt('Class name:');
+  if (name) createClass(name);
+};
+classSelect.onchange = switchClass;
+
+// ---------- Init ----------
+loadClasses();
